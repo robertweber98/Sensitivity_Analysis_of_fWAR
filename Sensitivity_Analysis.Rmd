@@ -1,0 +1,203 @@
+---
+title: "Sensitivity Analysis"
+author: "Rob Weber"
+date: "July 31, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+
+read.csv("F:/Fisher/Summer Research 18/Data/war stuff 2017.csv") -> wp.df
+wp.df <- wp.df %>%
+  rename("Name" = "ï..Name")
+read.csv("F:/Fisher/Summer Research 18/Data/team.csv", header = T) -> team_stats
+read.csv("F:/Fisher/Summer Research 18/Data/WAR defensive stuff 2017.csv", header = T) -> defense
+defense <- defense %>%
+  rename("Name" = "ï..Name", 
+         "Position" = "Pos")
+```
+
+```{r Cleaning}
+defense[ , c("Name", "Team", "Position", "Inn")] -> defense
+defense <- defense %>%
+  mutate(Team = ifelse(Team == "ARI", "Diamondbacks", 
+                    ifelse(Team == "ATL", "Braves", 
+                    ifelse(Team == "BAL", "Orioles", 
+                    ifelse(Team == "BOS", "Red Sox", 
+                    ifelse(Team == "CHC", "Cubs", 
+                    ifelse(Team == "CIN", "Reds", 
+                    ifelse(Team == "CLE", "Indians", 
+                    ifelse(Team == "COL", "Rockies", 
+                    ifelse(Team == "CHW", "White Sox", 
+                    ifelse(Team == "DET", "Tigers", 
+                    ifelse(Team == "HOU", "Astros", 
+                    ifelse(Team == "KCR", "Royals", 
+                    ifelse(Team == "LAA", "Angels", 
+                    ifelse(Team == "LAD", "Dodgers", 
+                    ifelse(Team == "MIA", "Marlins", 
+                    ifelse(Team == "MIL", "Brewers", 
+                    ifelse(Team == "MIN", "Twins", 
+                    ifelse(Team == "NYM", "Mets", 
+                    ifelse(Team == "NYY", "Yankees", 
+                    ifelse(Team == "OAK", "Athletics", 
+                    ifelse(Team == "PHI", "Phillies", 
+                    ifelse(Team == "PIT", "Pirates", 
+                    ifelse(Team == "SDP", "Padres", 
+                    ifelse(Team == "SEA", "Mariners", 
+                    ifelse(Team == "SFG", "Giants", 
+                    ifelse(Team == "STL", "Cardinals", 
+                    ifelse(Team == "TBR", "Rays", 
+                    ifelse(Team == "TEX", "Rangers", 
+                    ifelse(Team == "TOR", "Blue Jays", 
+                    ifelse(Team == "WSN", "Nationals", 
+                           "null")))))))))))))))))))))))))))))))
+as.character(wp.df$Name) -> wp.df$Name; as.character(defense$Name) -> defense$Name
+defense <- defense %>%
+  group_by(Name, Team) %>%
+  summarise(Position = Position[Inn == max(Inn)], 
+            Inn = sum(Inn))
+left_join(wp.df, defense, by = c("Name", "Team")) -> wp.df
+
+full.df <- wp.df %>% 
+  filter(Position != "P" & PA != 0)
+```
+
+```{r WAR Function}
+WAR <- function(df, Bat, wSB, wGDP, UBR, Fld, RPW, Pos, Rep) {
+  #Baserunning Runs
+  BR = wSB + wGDP + UBR
+  
+  # League Adjustment
+  lg_adj <- full.df %>%
+  group_by(League) %>%
+  summarise(League_Adjustment = ((-1)*(sum(Bat, na.rm = T) + sum(BR, na.rm = T) + sum(Fld, na.rm = T) + sum(Pos, na.rm = T)) 
+                                 / sum(PA, na.rm = T)))
+  left_join(df, lg_adj, by = "League") -> df
+  
+  WAR = (Bat + BR + Fld + Pos + df$League_Adjustment + Rep) / (RPW)
+  return(WAR)
+}
+```
+
+# fWAR
+```{r fWAR}
+data.frame("Team" = team_stats$Tm, "Wins" = team_stats$W) -> team_stats
+fWAR <- full.df %>%
+  mutate(WAR = scale(WAR)) %>%
+  group_by(Team) %>%
+  summarise(fWAR = sum(WAR, na.rm = T))
+left_join(team_stats, fWAR, by = "Team") -> team_stats
+```
+
+# Test 1
+The first test will be with a wOBA that is purposefully impossibly scaled. That meaning, the stats will be given run values that can't possibly be achieved.
+```{r OBP instead of wOBA}
+# Batting Runs = wRAA + (lgR/PA - (PF*lgR/PA))*PA + (lgR/PA - (AL or NL non-pitcher wRC/PA))*PA
+
+# wOBA_x
+# want to rename the fangraphs wOBA so I can add mine
+full.df <- full.df %>%
+  rename(wOBA_fg = wOBA)
+# get unintentional walks
+full.df$BB - full.df$IBB -> full.df$uBB 
+# get wOBA_x
+(((2 * full.df$uBB) +
+ (2 * full.df$HBP) +
+ (4 * full.df$X1B) +
+ (4 * full.df$X2B) +
+ (4 * full.df$X3B) +
+ (5 * full.df$HR)) / (full.df$AB + full.df$uBB + full.df$SF + full.df$HBP))-> full.df$wOBA_x
+ifelse(is.na(full.df$wOBA_x), 0, full.df$wOBA_x) -> full.df$wOBA_x
+
+## league runs per plate appearance
+lgR_PA <- sum(full.df$R) / sum(full.df$PA)
+
+## AL or NL non-pitcher wRC/PA: wRC = (((wOBA-League wOBA)/wOBA Scale)+(League R/PA))*PA
+## need the league (AL or NL) for each player first
+ifelse(full.df$Team %in% c("Yankees", "Red Sox", "Rays", "Orioles", "Blue Jays", "White Sox", "Indians", "Royals", "Tigers", "Twins", 
+                           "Mariners", "Angels", "Rangers", "Athletics", "Astros"), 
+       "AL", "NL") -> full.df$League
+### AL first
+full.df_AL <- full.df[full.df$League == "AL", ]
+(((full.df_AL$wOBA_x - mean(full.df_AL$wOBA_x)) + (lgR_PA)) * full.df_AL$PA) -> wRC.PA_AL # get wRC for each AL player first
+sum(wRC.PA_AL, na.rm = T) / sum(full.df_AL$PA, na.rm = T) -> wRC.PA_AL # then get the AL wRC per PA
+### then NL
+full.df_NL <- full.df[full.df$League == "NL", ]
+(((full.df_NL$wOBA_x - mean(full.df_NL$wOBA_x)) + (lgR_PA)) * full.df_NL$PA) -> wRC.PA_NL
+sum(wRC.PA_NL, na.rm = T) / sum(full.df_NL$PA, na.rm = T) -> wRC.PA_NL
+
+## need the park factor
+### gets a data frame with the park factor for each team 
+read.csv("F:/Fisher/Summer Research 18/Data/park factors.csv", header = T) -> pf
+pf[ , c("Team", "Basic")] -> pf 
+c("Team", "PF") -> colnames(pf) # get everything named nice and neat
+pf$PF / 100 -> pf$PF # the actual calculation uses the park factor divided by 100
+left_join(full.df, pf, by = "Team") -> full.df # gets the park factors into the full df
+
+ifelse(full.df$League == "AL", 
+       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_AL) * full.df$PA)), 
+       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_NL) * full.df$PA))) -> Bat_x
+
+WAR(full.df, Bat_x, full.df$wSB, full.df$wGDP, full.df$UBR, full.df$Fld, 10.048, full.df$Pos, full.df$Rep) -> full.df$WAR_1
+test1 <- full.df %>%
+  mutate(WAR_1 = scale(WAR_1)) %>%
+  group_by(Team) %>%
+  summarise(WAR_1 = sum(WAR_1, na.rm = T))
+left_join(team_stats, test1, by = "Team") -> team_stats
+```
+
+# Test 2
+This second test is to make Runs per Win at an absurdly high 20 runs.
+```{r RPW at 20}
+WAR(full.df, full.df$Bat, full.df$wSB, full.df$wGDP, full.df$UBR, full.df$Fld, 20, full.df$Pos, full.df$Rep) -> full.df$WAR_2
+RPW_x <- full.df %>%
+  mutate(WAR_2 = scale(WAR_2)) %>%
+  group_by(Team) %>%
+  summarise(WAR_2 = sum(WAR_2, na.rm = T))
+left_join(team_stats, RPW_x, by = "Team") -> team_stats
+```
+
+# Test 3
+The third and last test will make fielding runs hold 5 times as much weight.
+```{r}
+WAR(full.df, full.df$Bat, full.df$wSB, full.df$wGDP, full.df$UBR, full.df$Fld * 5, 10.048, full.df$Pos, full.df$Rep) -> full.df$WAR_3
+Fld_x <- full.df %>%
+  mutate(WAR_3 = scale(WAR_3)) %>%
+  group_by(Team) %>%
+  summarise(WAR_3 = sum(WAR_3, na.rm = T))
+left_join(team_stats, Fld_x, by = "Team") -> team_stats
+```
+
+```{r bootstrapping}
+set.seed(73118)
+10000 -> loops
+data.frame("Loop" = c(1:loops), "fWAR" = 0, "WAR_1" = 0, "WAR_2" = 0, "WAR_3" = 0) -> df.test
+for(i in 1:loops) {
+  sort(sample(1:30, 20, replace = FALSE)) -> selection
+  team_stats[c(selection), ] -> df
+  x <- model.matrix(Wins ~ fWAR + WAR_1 + WAR_2 + WAR_3, data = df)
+  y <- df$Wins
+  ridge.mod <- glmnet(x, y, alpha=0, nlambda=100, lambda.min.ratio=0.0001)
+  cv.test <- cv.glmnet(x, y, alpha=0, nlambda=100, lambda.min.ratio=0.0001, grouped = F)
+  best.lambda <- cv.test$lambda.min
+  abs(as.vector(predict(ridge.mod, s = best.lambda, type = "coefficients"))[3:10]) -> df.test[i, 2:5]
+}
+write.csv(df.test, "F:/Fisher/Summer Research 18/Testing/sensitivity_bootstrapping.csv")
+```
+
+```{r significance}
+read.csv("F:/Fisher/Summer Research 18/Testing/sensitivity_bootstrapping.csv") -> df.test
+gather(df.test[ , c(3:6)], key = "WAR", value = "beta") -> df.test_long
+df.ci <- df.test_long %>%
+  group_by(WAR) %>%
+  summarise(Bottom = quantile(beta, 0.025), 
+            Top = quantile(beta, 0.975))
+ggplot(df.test_long, aes(x = beta, fill = WAR)) + 
+  geom_density(alpha = 0.3)
+```
+
