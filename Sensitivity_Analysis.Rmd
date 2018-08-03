@@ -22,6 +22,11 @@ defense <- defense %>%
          "Position" = "Pos")
 ```
 
+# Data
+In this Rmd, "wp.df" is the full fangraphs.com data set, "team_stats" is the data set with team wins, and "defense" is the data set with fangraphs.com defensive stats.
+
+## Cleaning
+The only cleaning that needs to be done is getting the positions and innings played into the data set and narrowing the data down to non-pitchers.
 ```{r Cleaning}
 defense[ , c("Name", "Team", "Position", "Inn")] -> defense
 defense <- defense %>%
@@ -67,6 +72,8 @@ full.df <- wp.df %>%
   filter(Position != "P" & PA != 0)
 ```
 
+# WAR function
+This is just a basic function with the fundamental pieces of fWAR.
 ```{r WAR Function}
 WAR <- function(df, Bat, wSB, wGDP, UBR, Fld, RPW, Pos, Rep) {
   #Baserunning Runs
@@ -85,6 +92,7 @@ WAR <- function(df, Bat, wSB, wGDP, UBR, Fld, RPW, Pos, Rep) {
 ```
 
 # fWAR
+This justs gets the team totals for fWAR into the team data set.
 ```{r fWAR}
 data.frame("Team" = team_stats$Tm, "Wins" = team_stats$W) -> team_stats
 fWAR <- full.df %>%
@@ -119,7 +127,8 @@ lgR_PA <- sum(full.df$R) / sum(full.df$PA)
 
 ## AL or NL non-pitcher wRC/PA: wRC = (((wOBA-League wOBA)/wOBA Scale)+(League R/PA))*PA
 ## need the league (AL or NL) for each player first
-ifelse(full.df$Team %in% c("Yankees", "Red Sox", "Rays", "Orioles", "Blue Jays", "White Sox", "Indians", "Royals", "Tigers", "Twins", 
+ifelse(full.df$Team %in% c("Yankees", "Red Sox", "Rays", "Orioles", "Blue Jays", 
+                           "White Sox", "Indians", "Royals", "Tigers", "Twins", 
                            "Mariners", "Angels", "Rangers", "Athletics", "Astros"), 
        "AL", "NL") -> full.df$League
 ### AL first
@@ -140,9 +149,12 @@ pf$PF / 100 -> pf$PF # the actual calculation uses the park factor divided by 10
 left_join(full.df, pf, by = "Team") -> full.df # gets the park factors into the full df
 
 ifelse(full.df$League == "AL", 
-       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_AL) * full.df$PA)), 
-       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_NL) * full.df$PA))) -> Bat_x
+       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + 
+          ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_AL) * full.df$PA)), 
+       ((full.df$wOBA_x - mean(full.df$wOBA_x)) * full.df$PA + 
+          ((lgR_PA - (full.df$PF * lgR_PA)) * full.df$PA) + ((lgR_PA - wRC.PA_NL) * full.df$PA))) -> Bat_x
 
+# these next few lines just gets the team totals like before with fWAR
 WAR(full.df, Bat_x, full.df$wSB, full.df$wGDP, full.df$UBR, full.df$Fld, 10.048, full.df$Pos, full.df$Rep) -> full.df$WAR_1
 test1 <- full.df %>%
   mutate(WAR_1 = scale(WAR_1)) %>%
@@ -173,12 +185,15 @@ Fld_x <- full.df %>%
 left_join(team_stats, Fld_x, by = "Team") -> team_stats
 ```
 
-```{r bootstrapping}
+This is the code from the bootstrapping. It takes a little while to run, so, I included the data set with the results in this repo. It runs the ridge regression with 20 random teams at a time.
+```{r bootstrapping, eval=FALSE}
 set.seed(73118)
-10000 -> loops
+10000 -> loops # number of loops
+# need a df to store the results
 data.frame("Loop" = c(1:loops), "fWAR" = 0, "WAR_1" = 0, "WAR_2" = 0, "WAR_3" = 0) -> df.test
 for(i in 1:loops) {
-  sort(sample(1:30, 20, replace = FALSE)) -> selection
+  # going to do this by taking 20 random teams and finding betas
+  sort(sample(1:30, 20, replace = FALSE)) -> selection 
   team_stats[c(selection), ] -> df
   x <- model.matrix(Wins ~ fWAR + WAR_1 + WAR_2 + WAR_3, data = df)
   y <- df$Wins
@@ -187,11 +202,11 @@ for(i in 1:loops) {
   best.lambda <- cv.test$lambda.min
   abs(as.vector(predict(ridge.mod, s = best.lambda, type = "coefficients"))[3:10]) -> df.test[i, 2:5]
 }
-write.csv(df.test, "F:/Fisher/Summer Research 18/Testing/sensitivity_bootstrapping.csv")
+write.csv(df.test, "sensitivity_bootstrapping.csv")
 ```
 
+Here, "df.test" is data set of the bootstrapping results. This chunk gives you the 95% confidence intervals and a graphical display.
 ```{r significance}
-read.csv("F:/Fisher/Summer Research 18/Testing/sensitivity_bootstrapping.csv") -> df.test
 gather(df.test[ , c(3:6)], key = "WAR", value = "beta") -> df.test_long
 df.ci <- df.test_long %>%
   group_by(WAR) %>%
