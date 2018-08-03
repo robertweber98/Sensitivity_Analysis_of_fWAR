@@ -3,6 +3,7 @@
   - Setting the linear weights in wOBA to impossible run values. (i.e. a run value of 5 for a homerun or 2 for a walk)
   - Setting the Runs per Win value to 20, which is about twice the value fangraphs.com uses.
   - Giving fielding runs 5 times more weight by multiplying the value by 5 in the equation.
+  
   I, then, performed a bootstrapped ridge-regression 10,000 times and stored the beta values. After graphing the beta values for the different fWARs, it is very clear that none of them are statistically significantly different in their ability to predict team wins. 
  
 ## Data
